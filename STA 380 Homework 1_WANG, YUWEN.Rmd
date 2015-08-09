@@ -1,0 +1,338 @@
+---
+title: 'STA 380 Homework 1: WANG,YUWEN'
+author: "Yuwen WANG"
+date: "Wednesday, August 05, 2015"
+output: word_document
+---
+```{r, echo=FALSE,message=FALSE}
+#setwd("G:/McCombs/Courses-S1/Predictive Modeling/james/my folder")
+georgia <- read.csv("georgia2000.csv")
+wine <- read.csv("wine.csv")
+socialmkt <- read.csv("social_marketing.csv")
+library(dplyr)
+```
+
+# 1. Exploratory Analysis
+```{r,echo=F}
+geor <- mutate(georgia,under_count_rate = (votes - gore - bush)/votes)
+ucr_equip <- summarise(group_by(geor,equip),avgrate = round(mean(under_count_rate),digits=3))
+ucr_equip
+```
+We notice the undercount rates of different equipments are not the same, the undercount rate of 'PAPER' is the lowest, roughly one-half that of "OPTICAL" or "PUNCH".
+
+
+```{r,echo=F}
+poor_ucr <- tally(group_by(geor,poor,equip))
+poor_ucr
+```
+At a brief glance, we notice that the number of poor counties using 'OPTICAL', which has the highest undercount rate, is about 1/3 the number of rich counties. In addition, rich communities have absolutely no access to 'PAPER', which has the lowest undercount ratio, at all.
+
+
+```{r,echo=F}
+rich <- poor_ucr[1:3,-1]
+mutate(rich,frac=round(n/sum(n),digits=2))
+poor <- poor_ucr[4:7,-1]
+mutate(poor,frac=round(n/sum(n),digits=2))
+```
+Breaking it down a little further, we notice that 55% of rich people have access to 'OPTICAL', the equipment with the highest undercount rate, while in contrast 'LEVEL' is used by the majority of poor group, which has a moderate undercount rate. 
+
+
+```{r,echo=F}
+ucr_poor <- summarise(group_by(geor,poor),avgrate = round(mean(under_count_rate),digits=3))
+ucr_poor
+```
+Further confirmed by the fact that rich communities have a undercount rate 2 times that of poor communities, we can therefore conclde that access to different equipment has a disparate impact on poor communities. 
+
+
+
+We can apply similar analysis to minority communities by looking at "perAA". I split "perAA" at 25% quantile and made it an indicator variable like "poor", and came to a similar conclusion that access to different equipment has a disparate impact on minority communities.
+
+```{r,echo=F}
+Q1 <- quantile(geor$perAA,0.25)
+AA_equip_ucr <- mutate(geor,AA = (perAA<=Q1)) %>% select(AA,equip,under_count_rate)
+AA_equip <- tally(group_by(AA_equip_ucr,AA,equip))
+nonAA <- AA_equip[1:4,-1]
+mutate(nonAA,frac=round(n/sum(n),digits=2))
+AA <- AA_equip[5:7,-1]
+mutate(AA,frac=round(n/sum(n),digits=2))
+ucr_AA <- summarise(group_by(AA_equip_ucr,AA),avgrate = round(mean(under_count_rate),digits=3))
+ucr_AA
+```
+
+# 2.
+```{r,message=FALSE,echo=FALSE}
+library(fImport)
+library(foreach)
+library(mosaic)
+load("org_prices.Rdata")
+```
+
+```{r,echo=F,message = FALSE}
+# mystock = c('SPY','TLT','LQD','EEM','VNQ')
+# org_prices = yahooSeries(mystock, from = '2011-01-01',to='2015-07-31')
+
+YahooPricesToReturn <- function(rawdata){
+  index <- grep("Adj.Close",colnames(rawdata))
+  closing <- rawdata[,index]
+  N <- nrow(closing)
+  diff <- as.data.frame(closing[2:N,]) / as.data.frame(closing[1:(N-1),]) - 1
+  mynames <- strsplit(colnames(diff),'.',fixed = T)
+  newnames <- lapply(mynames,function(x) return(paste0(x[1],'.PctReturn')))
+  colnames(diff) <- newnames
+  returns <- as.data.frame(na.omit(diff))
+  # price_return <- cbind(closing[2:N,],returns)
+  
+}
+
+returns = YahooPricesToReturn(org_prices)
+```
+
+### Building Portfolios
+The following graph shows the average daily return and risk(measured by standard deviation of daily returns) of 5 assets in the past 5 years.
+
+For a safer investment, I choose to invest 50% in LQD, 30% in SPY, and 20% in TLT.
+For a riskier investment, I choose to invest 60% in SPY and 40% in VNQ.
+```{r, echo=F}
+my_mean <- sapply(returns,mean)
+my_sd <- sapply(returns,sd)
+my_lab <- sapply(colnames(returns),function(x) return(substr(x,1,3)))
+
+par(mar=c(5,5,3,5)+0.1)
+plot(my_mean,type='p',pch=17,cex=2,col='green',xlab='Ticker',ylab='Return',xaxt='n',lwd=2)
+axis(1,labels=my_lab,at=1:5)
+abline(h=0,lty=2,lwd=2,col='green')
+par(new=T)
+plot(my_sd,type='p',pch=15,cex=2,col='red',xaxt='n',yaxt='n',xlab='',ylab='',lwd=2)
+axis(4)
+mtext('Risk',side=4,line=3)
+legend('bottomright',col=c('green','red'),legend=c('Return','Risk'),pch=c(17,15))
+title(main="5 Year Return vs. Risk")
+```
+
+### Simulation
+```{r,echo=F}
+total_wealth <- 10000
+portfolios <- c('EVEN','SAFE','RISK')
+
+for (i in 1:length(portfolios)){
+  
+  portfolio_type <- portfolios[i]
+  
+  if (portfolio_type == 'SAFE'){
+    assets <- returns[,1:3]
+    weight <- c(0.3,0.2,0.5)
+  } else if(portfolio_type == 'RISK'){
+    assets <- returns[,c(1,5)]
+    weight <- c(0.6,0.4)
+  } else {
+    assets <- returns
+    weight <- rep(0.2,5)
+  }
+  
+  
+  n_days <- 20
+  set.seed(1)
+  
+  sim <- foreach(i = 1:5000,.combine='rbind') %do%{
+    total_wealth <- 10000
+    holdings <- total_wealth * weight
+    wealth_tracker <- rep(0,n_days)
+    for (day in 1:n_days){
+      day_return <- resample(assets,1,orig.ids=F)
+      holdings <- holdings * (1 + day_return)
+      total_wealth <- sum(holdings)
+      wealth_tracker[day] <- total_wealth
+      holdings <- total_wealth * weight    ## Assumption: reblance everyday with no costs
+    }
+    wealth_tracker
+  }
+  
+  assign(paste0('SIM_', portfolio_type),sim)
+  assign(paste0('VaR_',portfolio_type),quantile(sim[,n_days],0.05)-10000)
+
+}
+```
+
+The (AWESOME) histogram below shows the distribution of total wealth if we hold each of the 3 portfolios for 20 days. As a risk-reversion person, I would recomment the safer investment(50%LQD, 30% SPY, 20% TLT), with the lowest VaR(5% level) and highest probability of earning money.
+
+```{r, echo=F}
+breaks <- seq(8300,12300,by=100)
+hist(SIM_EVEN[,n_days],breaks=breaks,main='',xlab='Total Wealth',border="darkgrey", col="grey", axes=FALSE,ylim=c(0,1200))
+par(new = T)
+hist(SIM_SAFE[,n_days],breaks=breaks,main='',xlab='',axes = F, border=rgb(0,100,0,100,maxColorValue=255), col= rgb(0,100,0,50,maxColorValue=255),ylim=c(0,1200))
+par(new = T)
+hist(SIM_RISK[,n_days],breaks=breaks,main='',xlab='',axes = F, border=rgb(255,0,0,100,maxColorValue=255), col= rgb(255,0,0,40,maxColorValue=255),ylim=c(0,1200))
+abline(v=10000,lwd=2,col='blue')
+abline(v=VaR_EVEN+10000,lty=2,lwd=3,col='grey')
+abline(v=VaR_SAFE+10000,lty=2,lwd=3,col=rgb(100,50,0,100,maxColorValue=255))
+abline(v=VaR_RISK+10000,lty=2,lwd=3,col=rgb(255,0,0,100,maxColorValue=255))
+axis(2,at=seq(0,1200,by=100))
+axis(1,at=seq(8300,12300,by=100))
+text(9250,200,"VaR_EVEN = -362",font=2,col='darkgrey')
+text(9000,120,"VaR_RISK = -599",font=2,col=rgb(255,0,0,100,maxColorValue=255))
+text(9400,500,"VaR_SAFE = -188",font=2,col=rgb(100,50,0,100,maxColorValue=255))
+legend('topright',col=c('grey',rgb(0,100,0,50,maxColorValue=255),rgb(255,0,0,40,maxColorValue=255)),legend=c('EVEN','SAFE','RISK'),pch=15)
+title("End-of-20-Day Total Wealth Distribution")
+
+e<-nrow(SIM_EVEN[SIM_EVEN[,20]>=10000,])/5000
+r<-nrow(SIM_EVEN[SIM_RISK[,20]>=10000,])/5000
+s<-nrow(SIM_EVEN[SIM_SAFE[,20]>=10000,])/5000
+
+pct_profitable <- c(e,r,s)
+VaR <- c(VaR_EVEN,VaR_RISK,VaR_SAFE)
+data.frame(cbind(VaR,pct_profitable),row.names=c('EVEN','RISK','SAFE'))
+```
+
+# 3. Cluster
+### 3.1 Red vs. White
+```{r,echo=F,message=F}
+library(ggplot2)
+org_wine <- read.csv("wine.csv")
+
+```
+
+First, I use all 11 chemicals to run a k-means clustering, separating all the records into two groups. From the tabulation result we can see that unsupervised learning can do a very good job to separate red wine and white wine.
+
+
+
+```{r,echo=F}
+chemical <- scale(org_wine[,1:11], center=T,scale=T)
+mu <- attr(chemical,"scaled:center")
+sigma <- attr(chemical,"scaled:scale")
+
+set.seed(1)
+clust1 <- kmeans(chemical,2,nstart=25)
+
+c1<-which(clust1$cluster == 1)
+c2<-which(clust1$cluster == 2)
+
+
+color1 <- org_wine[c1,'color']
+table(color1)
+
+color2 <- org_wine[c2,'color']
+table(color2)
+```
+
+```{r,echo=F}
+plot(clust1$center[1,],yaxt = 'n',xaxt='n',pch=15,cex=2)
+par(new=T)
+plot(clust1$center[2,],col='red',xaxt='n',pch=15,cex=2)
+axis(1,at=seq(1,11,by=1),labels=colnames(chemical))
+```
+By ploting the two centers for each attribute, we notice that attribute alcohol is hardly distinguishable between two clusters. So I remove alcohol and redo a k-means clustering. The separating result is still satisfying (excatly the same, in fact).
+
+```{r,echo=F}
+chemical2 <- scale(org_wine[,-c(11:13)],center=T,scale=T)
+mu2 <- attr(chemical2,"scaled:center")
+sigma2<- attr(chemical2,"scaled:scale")
+
+
+set.seed(1)
+clust2 <- kmeans(chemical2,2,nstart=25)
+clust2$center[1,]*sigma2 + mu2
+clust2$center[2,]*sigma2 + mu2
+
+c2.1<-which(clust2$cluster == 1)
+c2.2<-which(clust2$cluster == 2)
+
+color1 <- org_wine[c2.1,'color']
+table(color1)
+
+color2 <- org_wine[c2.2,'color']
+table(color2)
+```
+
+We plot the two clusters agiainst the two most distinguishable attributes. We can see these two factors alone can separate the observations very well.
+```{r,echo=F}
+qplot(total.sulfur.dioxide,volatile.acidity,data=org_wine,color=org_wine$color)
+```
+
+We can also use principal component analysis. From the graph below, we can see that the first component almost suffices to tell the white wine from the red wine.
+```{r,echo=F}
+pc1 <- prcomp(chemical,.scale=F)
+loadings = pc1$rotation
+scores = pc1$x
+qplot(scores[,1], scores[,2], color=org_wine$color, xlab='Component 1', ylab='Component 2')
+```
+
+In this case, both clustering and PCA are doing a great job distinguishing red wine and white wine. However, I would recommend clustering over PCA, since with a similar result, not only has clustering got rid of an attribute but it is much easier to interpret than pca as well.
+
+### 3.2 Quality
+However, clusering doesn't work well for telling different quality apart. Since there're 7 levels of quality (3 to 9), I specify the number of clusters to be 7. However, if we contrast any two of the clusters, e.g. cluster 1 and cluster 6, they give a similar distribution of wine quality as shown in the bar plot below.
+```{r,echo=F}
+set.seed(1)
+clust3 <- kmeans(chemical,7,nstart=25)
+c3.1 <- which(clust3$cluster==1)
+c3.6 <- which(clust3$cluster==6)
+
+quality1 <- org_wine[c3.1,'quality']
+quality6 <- org_wine[c3.6,'quality']
+
+par(mfrow=c(2,1))
+barplot(table(quality1),xlim=c(0,9),ylab="Cluster 1")
+barplot(table(quality6),xlim=c(0,9),ylab="Cluster 2")
+```
+
+PCA does not working either.
+```{r,echo=F}
+pc2 <- prcomp(chemical,.scale=F)
+loadings = pc2$rotation
+scores = pc1$x
+qplot(scores[,1], scores[,2], color=org_wine$quality, xlab='Component 1', ylab='Component 2')
+```
+
+# 4. Market Segmentation
+```{r,echo=F}
+org_social_mkt <- read.csv("social_marketing.csv")
+```
+
+I first tried a clustering method with 3 clusters. The following graph shows the the 3 cluster centers broken down to each attribute. Taking a closer look at these e clusters, I could already picture three different user groups, so I sticked with 3 clusters. I noticed the 1st cluster(in red) showed significantly different behaviors from the 2nd and 3rd cluster(in green and blue), I broke the picture down to 2 pieces to facilitate comparison.
+
+```{r,echo=F}
+social_mkt <- scale(org_social_mkt[,-c(1:2)],center=T,scale=T)
+mu <- attr(social_mkt,"scaled:center")
+sigma <- attr(social_mkt,"scaled:scale")
+
+set.seed(1)
+clust <- kmeans(social_mkt,3,nstart=25)
+
+plot(clust$center[1,]*sigma + mu,pch=15,col="red",yaxt='n',xaxt='n',type='b')
+par(new=T)
+plot(clust$center[2,]*sigma + mu,pch=17,col="blue",yaxt='n',xaxt='n',type='b')
+par(new=T)
+plot(clust$center[3,]*sigma + mu,pch=19,col="green",xaxt='n',type='b')
+axis(1,at=seq(1,35,by=1),colnames(social_mkt))
+legend("topright",col=c('red','blue','green'),pch=c(15,17,19),legend=c("Cluster 1","Cluster 2","Cluster 3"))
+```
+
+
+The 1st cluster shows strong inclination to key words "sports_fandom, family, food, parenting, school,religion" etc., very clearly picturing a young father, while for the other two groups with rather girlish key words "photo sharing, shopping, health nutrition, cooking, personal fitness, fashion" are very likely to be female users. Plotting the clustering against two most distinguishable factors sports fandom and health nutrition, we can see the 1st cluster are well separated from the 2nd and 3rd.
+```{r,echo=F}
+qplot(sports_fandom,health_nutrition,data=org_social_mkt,color=factor(clust$cluster==1))
+
+```
+
+
+```{r,echo=F£¬eval=F}
+par(mfrow=c(2,1))
+plot(clust$center[1,]*sigma + mu,pch=15,col="red",yaxt='n',xaxt='n',type='b',ylab='',xlab='')
+par(new=T)
+plot(clust$center[2,]*sigma + mu,pch=17,col="blue",yaxt='n',xaxt='n',type='b',ylab='',xlab='')
+axis(1,at=seq(1,35,by=1),colnames(social_mkt))
+legend("topright",col=c('red','blue'),pch=c(15,17),legend=c("Cluster 1","Cluster 2"))
+
+plot(clust$center[2,]*sigma + mu,pch=17,col="blue",yaxt='n',xaxt='n',type='b',ylab='',xlab='')
+par(new=T)
+plot(clust$center[3,]*sigma + mu,pch=19,col="green",yaxt='n',xaxt='n',type='b',ylab='',xlab='')
+axis(1,at=seq(1,35,by=1),colnames(social_mkt))
+legend("topright",col=c('green','blue'),pch=c(19,17),legend=c("Cluster 3","Cluster 2"))
+```
+
+Between the 2nd and 3rd clusters, the most distinguishable differences are the 3rd cluster cared more about cooking, health &nutrition, and fitness, while the 2nd twitted more about photo_sharing, shopping. These clearly indicate that the 2nd cluster are younger females, very likely school girls compared to a more matured user group in the 3rd cluster. Plotting against the two most distinguishable attributes health nutrition and cooking, we can see that the 3rd cluster are centered at the bottom left corner.
+
+```{r,echo=F}
+females <- org_social_mkt[clust$cluster!=1,]
+clust_female <- clust$cluster[clust$cluster!=1]
+qplot(cooking,health_nutrition,data=females,color=factor(clust_female))
+```
